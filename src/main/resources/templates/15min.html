@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>15分钟统计 - 币安清算数据</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #f0b90b;
+            text-align: center;
+        }
+        .nav {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+            background-color: #1e1e1e;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .nav a {
+            color: #e0e0e0;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 5px 10px;
+            border-radius: 3px;
+        }
+        .nav a:hover, .nav a.active {
+            background-color: #f0b90b;
+            color: #121212;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .status {
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        .connected {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .disconnected {
+            background-color: #F44336;
+            color: white;
+        }
+        button {
+            background-color: #f0b90b;
+            color: #121212;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #e0aa0b;
+        }
+        input[type="text"] {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #333;
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+            margin-left: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background-color: #1e1e1e;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+        th {
+            background-color: #2a2a2a;
+            color: #f0b90b;
+        }
+        tr:hover {
+            background-color: #2a2a2a;
+        }
+        tr.long {
+            border-left: 3px solid #4CAF50;
+        }
+        tr.short {
+            border-left: 3px solid #F44336;
+        }
+        tr.neutral {
+            border-left: 3px solid #FFD700;
+        }
+        .heatmap-container {
+            margin-top: 30px;
+            background-color: #1e1e1e;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .heatmap-title {
+            color: #f0b90b;
+            margin-bottom: 15px;
+            font-size: 18px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>15分钟统计 - 币安清算数据</h1>
+        
+        <div class="nav">
+            <a href="/">实时数据</a>
+            <a href="/15min.html" class="active">15分钟统计</a>
+            <a href="/1hour.html">1小时统计</a>
+            <a href="/4hour.html">4小时统计</a>
+            <a href="/daily.html">日统计</a>
+        </div>
+        
+        <div class="header">
+            <div>
+                <button id="toggleBtn">打开行情窗口</button>
+                <input type="text" id="symbolFilter" placeholder="过滤交易对...">
+            </div>
+            <div id="status" class="status disconnected">未连接</div>
+        </div>
+        
+        <!-- 热点图容器 -->
+        <div class="heatmap-container">
+            <div class="heatmap-title">交易对价格变化热力图</div>
+            <div id="heatmap"></div>
+        </div>
+        
+        <table id="statsTable">
+            <thead>
+                <tr>
+                    <th>交易对</th>
+                    <th>多单数</th>
+                    <th>空单数</th>
+                    <th>总价值(USD)</th>
+                    <th>最大价值(USD)</th>
+                    <th>最大价值方向</th>
+                    <th>最新价格</th>
+                    <th>平均价格</th>
+                    <th>振幅(%)</th>
+                    <th>最后更新</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- 数据将通过JavaScript动态添加 -->
+            </tbody>
+        </table>
+    </div>
+    
+    <script>
+        // 全局变量
+        let ws = null;
+        let marketWindow = null;
+        let filterValue = '';
+        let statsData = {};
+        let refreshInterval = null;
+
+        // 初始化WebSocket连接
+        function initWebSocket() {
+            // 关闭现有连接
+            if (ws) {
+                ws.close();
+            }
+
+            // 连接到币安WebSocket API
+            ws = new WebSocket('wss://fstream.binance.com/ws/!forceOrder@arr');
+
+            // 连接打开时的处理
+            ws.onopen = function() {
+                document.getElementById('status').textContent = '已连接';
+                document.getElementById('status').className = 'status connected';
+                console.log('已连接到币安WebSocket API');
+            };
+
+            // 接收消息时的处理
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.e === 'forceOrder') {
+                    // 将数据发送到服务器
+                    sendLiquidationDataToServer(data);
+                    // 更新统计数据
+                    fetchStatsData();
+                }
+            };
+
+            // 连接关闭时的处理
+            ws.onclose = function() {
+                document.getElementById('status').textContent = '连接已关闭';
+                document.getElementById('status').className = 'status disconnected';
+                console.log('WebSocket连接已关闭，尝试重新连接...');
+                // 尝试重新连接
+                setTimeout(initWebSocket, 5000);
+            };
+
+            // 连接错误时的处理
+            ws.onerror = function(error) {
+                document.getElementById('status').textContent = '连接错误';
+                document.getElementById('status').className = 'status disconnected';
+                console.error('WebSocket错误:', error);
+            };
+        }
+
+        // 将清算数据发送到服务器
+        function sendLiquidationDataToServer(data) {
+            fetch('/api/liquidation', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            }).catch(error => {
+                console.error('发送数据到服务器时出错:', error);
+            });
+        }
+
+        // 获取统计数据
+        async function fetchStatsData() {
+            try {
+                const response = await fetch('/api/liquidation');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                statsData = data;
+                updateStatsTable();
+                updateHeatmap(); // 更新热点图
+                updateRefreshStatus();
+            } catch (error) {
+                console.error('获取统计数据时出错:', error);
+            }
+        }
+
+        // 更新热点图
+        function updateHeatmap() {
+            // 清空热点图容器
+            const heatmapContainer = document.getElementById('heatmap');
+            heatmapContainer.innerHTML = '';
+            
+            // 如果没有数据，则不创建热点图
+            if (Object.keys(statsData).length === 0) return;
+            
+            // 准备数据 - 过滤并按总价值排序
+            const data = Object.keys(statsData)
+                .filter(symbol => !filterValue || symbol.includes(filterValue.toUpperCase()))
+                .map(symbol => {
+                    const stats = statsData[symbol];
+                    // 计算价格变化百分比 (使用振幅作为价格变化的指标)
+                    const priceChange = stats.lastPrice > stats.avgPrice ? stats.amplitude : -stats.amplitude;
+                    return {
+                        symbol,
+                        longCount: stats.longCount,
+                        shortCount: stats.shortCount,
+                        totalValue: stats.totalValue,
+                        ratio: stats.longCount / (stats.longCount + stats.shortCount) || 0.5,
+                        amplitude: stats.amplitude,
+                        priceChange: priceChange,
+                        lastPrice: stats.lastPrice,
+                        avgPrice: stats.avgPrice
+                    };
+                })
+                .sort((a, b) => b.totalValue - a.totalValue)
+                .slice(0, 20); // 只显示前20个交易对
+            
+            // 设置热点图尺寸
+            const margin = {top: 20, right: 20, bottom: 60, left: 60};
+            const width = Math.min(800, window.innerWidth - 100) - margin.left - margin.right;
+            const height = 300 - margin.top - margin.bottom;
+            
+            // 创建SVG
+            const svg = d3.select('#heatmap')
+                .append('svg')
+                .attr('width', width + margin.left + margin.right)
+                .attr('height', height + margin.top + margin.bottom)
+                .append('g')
+                .attr('transform', `translate(${margin.left},${margin.top})`);
+            
+            // 创建比例尺
+            const x = d3.scaleBand()
+                .range([0, width])
+                .domain(data.map(d => d.symbol))
+                .padding(0.05);
+            
+            const y = d3.scaleBand()
+                .range([height, 0])
+                .domain(['价格变化'])
+                .padding(0.05);
+            
+            // 添加X轴
+            svg.append('g')
+                .attr('transform', `translate(0,${height})`)
+                .call(d3.axisBottom(x))
+                .selectAll('text')
+                .attr('transform', 'translate(-10,0)rotate(-45)')
+                .style('text-anchor', 'end')
+                .style('fill', '#fff');
+            
+            // 添加Y轴
+            svg.append('g')
+                .call(d3.axisLeft(y))
+                .selectAll('text')
+                .style('fill', '#fff');
+            
+            // 创建颜色比例尺 - 从红色(跌)到绿色(涨)
+            const colorScale = d3.scaleLinear()
+                .domain([-5, 0, 5]) // 价格变化范围，可以根据实际情况调整
+                .range(['#F44336', '#FFD700', '#4CAF50']);
+            
+            // 创建大小比例尺
+            const sizeScale = d3.scaleLinear()
+                .domain([0, d3.max(data, d => d.totalValue)])
+                .range([0.3, 1]);
+            
+            // 添加热点图矩形
+            svg.selectAll()
+                .data(data)
+                .enter()
+                .append('rect')
+                .attr('x', d => x(d.symbol))
+                .attr('y', d => y('价格变化'))
+                .attr('width', x.bandwidth())
+                .attr('height', y.bandwidth())
+                .style('fill', d => colorScale(d.priceChange))
+                .style('fill-opacity', d => sizeScale(d.totalValue))
+                .style('stroke', '#333')
+                .style('stroke-width', 1)
+                .append('title')
+                .text(d => `${d.symbol}\n价格变化: ${d.priceChange.toFixed(2)}%\n多单: ${d.longCount}\n空单: ${d.shortCount}\n总价值: ${d.totalValue.toFixed(2)} USD\n最新价格: ${d.lastPrice.toFixed(2)}\n平均价格: ${d.avgPrice.toFixed(2)}`);
+        }
+
+        // 更新统计表格
+        function updateStatsTable() {
+            const tbody = document.getElementById('statsTable').getElementsByTagName('tbody')[0];
+            tbody.innerHTML = ''; // 清空表格
+
+            // 获取所有交易对并排序
+            const symbols = Object.keys(statsData).filter(symbol => {
+                return !filterValue || symbol.includes(filterValue.toUpperCase());
+            }).sort((a, b) => {
+                return statsData[b].totalValue - statsData[a].totalValue; // 按总价值降序排序
+            });
+
+            // 添加行
+            symbols.forEach(symbol => {
+                const stats = statsData[symbol];
+                const row = tbody.insertRow();
+
+                // 设置行的类名，用于样式
+                if (stats.longCount > stats.shortCount) {
+                    row.className = 'long';
+                } else if (stats.shortCount > stats.longCount) {
+                    row.className = 'short';
+                } else {
+                    row.className = 'neutral';
+                }
+
+                // 添加单元格
+                const symbolCell = row.insertCell(0);
+                const longCountCell = row.insertCell(1);
+                const shortCountCell = row.insertCell(2);
+                const totalValueCell = row.insertCell(3);
+                const maxValueCell = row.insertCell(4);
+                const maxValueSideCell = row.insertCell(5);
+                const lastPriceCell = row.insertCell(6);
+                const avgPriceCell = row.insertCell(7);
+                const amplitudeCell = row.insertCell(8);
+                const lastUpdateCell = row.insertCell(9);
+
+                // 设置单元格内容
+                symbolCell.textContent = symbol;
+                longCountCell.textContent = stats.longCount;
+                shortCountCell.textContent = stats.shortCount;
+                totalValueCell.textContent = stats.totalValue.toFixed(2);
+                maxValueCell.textContent = stats.maxValue.toFixed(2);
+                maxValueSideCell.textContent = stats.maxValueSide === 'BUY' ? '做空' : '做多';
+                lastPriceCell.textContent = stats.lastPrice.toFixed(symbol.includes('BTC') ? 2 : (symbol.includes('ETH') ? 2 : 4));
+                avgPriceCell.textContent = stats.avgPrice.toFixed(symbol.includes('BTC') ? 2 : (symbol.includes('ETH') ? 2 : 4));
+                amplitudeCell.textContent = stats.amplitude.toFixed(2);
+                lastUpdateCell.textContent = new Date(stats.lastUpdateTime).toLocaleTimeString();
+
+                // 添加点击事件，查看详细信息
+                row.addEventListener('click', function() {
+                    window.location.href = `/detail/${symbol}`;
+                });
+                row.style.cursor = 'pointer';
+            });
+            
+            // 如果市场窗口打开，发送数据
+            if (marketWindow && !marketWindow.closed) {
+                try {
+                    marketWindow.postMessage({
+                        type: 'statsData',
+                        data: statsData
+                    }, '*');
+                } catch (error) {
+                    console.error('向市场窗口发送数据时出错:', error);
+                }
+            }
+            
+            // 将清算数据发送到服务器
+            sendStatsDataToServer();
+        }
+        
+        // 将统计数据发送到服务器
+        function sendStatsDataToServer() {
+            fetch('/api/stats', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(statsData)
+            }).catch(error => {
+                console.error('发送统计数据到服务器时出错:', error);
+            });
+        }
+
+        // 更新刷新状态
+        function updateRefreshStatus() {
+            const now = new Date();
+            document.getElementById('status').textContent = `已连接 | 上次更新: ${now.toLocaleTimeString()}`;
+            document.getElementById('status').className = 'status connected';
+        }
+
+        // 初始化页面
+        document.addEventListener('DOMContentLoaded', function() {
+            // 初始化WebSocket连接
+            initWebSocket();
+            
+            // 获取初始数据
+            fetchStatsData();
+
+            // 设置定时刷新
+            refreshInterval = setInterval(fetchStatsData, 10000); // 每10秒刷新一次
+
+            // 打开/关闭行情窗口按钮
+            document.getElementById('toggleBtn').addEventListener('click', function() {
+                if (marketWindow && !marketWindow.closed) {
+                    marketWindow.close();
+                    this.textContent = '打开行情窗口';
+                } else {
+                    marketWindow = window.open('market.html', 'marketWindow', 'width=800,height=600');
+                    this.textContent = '关闭行情窗口';
+                }
+            });
+
+            // 交易对过滤器
+            document.getElementById('symbolFilter').addEventListener('input', function() {
+                filterValue = this.value.trim();
+                updateStatsTable();
+                updateHeatmap(); // 更新热点图
+            });
+            
+            // 初始调整窗口大小时更新热点图
+            window.addEventListener('resize', function() {
+                updateHeatmap();
+            });
+        });
+
+        // 处理窗口关闭事件
+        window.addEventListener('beforeunload', function() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+            if (ws) {
+                ws.close();
+            }
+            if (marketWindow && !marketWindow.closed) {
+                marketWindow.close();
+            }
+        });
+    </script>
+</body>
+</html>

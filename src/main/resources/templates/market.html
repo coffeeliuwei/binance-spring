@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>币安强平订单市场数据</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: #fff;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            padding: 10px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        h2 {
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        .chart-container {
+            margin-bottom: 20px;
+        }
+        .data-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .data-section {
+            flex: 1;
+            min-width: 300px;
+        }
+        .liquidation-list, .stats-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            max-height: 300px;
+            overflow-y: auto;
+            background-color: #2a2a2a;
+            border-radius: 4px;
+        }
+        .liquidation-list li, .stats-list li {
+            padding: 8px;
+            border-bottom: 1px solid #333;
+        }
+        .long {
+            color: #4CAF50; /* 绿色 */
+        }
+        .short {
+            color: #F44336; /* 红色 */
+        }
+        .neutral {
+            color: #FFD700; /* 金色 */
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>币安强平订单市场数据</h2>
+        </div>
+        
+        <div class="chart-container">
+            <h3>热点图</h3>
+            <div id="heatmap"></div>
+        </div>
+        
+        <div class="data-container">
+            <div class="data-section">
+                <h3>最近强平订单</h3>
+                <ul id="liquidationList" class="liquidation-list"></ul>
+            </div>
+            
+            <div class="data-section">
+                <h3>15分钟统计</h3>
+                <ul id="statsList" class="stats-list"></ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 全局变量
+        let liquidationData = [];
+        let statsData = {};
+        
+        // 初始化热点图
+        function initHeatmap() {
+            // 热点图将在接收到数据后创建
+        }
+        
+        // 更新热点图
+        function updateHeatmap() {
+            // 使用D3.js创建热点图
+            const heatmapContainer = document.getElementById('heatmap');
+            heatmapContainer.innerHTML = '';
+            
+            // 如果没有数据，则不创建热点图
+            if (Object.keys(statsData).length === 0) return;
+            
+            // 准备数据
+            const data = Object.keys(statsData).map(symbol => {
+                const stats = statsData[symbol];
+                return {
+                    symbol,
+                    longCount: stats.longCount,
+                    shortCount: stats.shortCount,
+                    totalValue: stats.totalValue,
+                    ratio: stats.longCount / (stats.longCount + stats.shortCount) || 0.5,
+                    amplitude: stats.amplitude
+                };
+            }).sort((a, b) => b.totalValue - a.totalValue).slice(0, 20); // 只显示前20个
+            
+            // 设置热点图尺寸
+            const margin = {top: 20, right: 20, bottom: 60, left: 60};
+            const width = 600 - margin.left - margin.right;
+            const height = 400 - margin.top - margin.bottom;
+            
+            // 创建SVG
+            const svg = d3.select('#heatmap')
+                .append('svg')
+                .attr('width', width + margin.left + margin.right)
+                .attr('height', height + margin.top + margin.bottom)
+                .append('g')
+                .attr('transform', `translate(${margin.left},${margin.top})`);
+            
+            // 创建比例尺
+            const x = d3.scaleBand()
+                .range([0, width])
+                .domain(data.map(d => d.symbol))
+                .padding(0.05);
+            
+            const y = d3.scaleBand()
+                .range([height, 0])
+                .domain(['多空比例'])
+                .padding(0.05);
+            
+            // 添加X轴
+            svg.append('g')
+                .attr('transform', `translate(0,${height})`)
+                .call(d3.axisBottom(x))
+                .selectAll('text')
+                .attr('transform', 'translate(-10,0)rotate(-45)')
+                .style('text-anchor', 'end')
+                .style('fill', '#fff');
+            
+            // 添加Y轴
+            svg.append('g')
+                .call(d3.axisLeft(y))
+                .selectAll('text')
+                .style('fill', '#fff');
+            
+            // 创建颜色比例尺
+            const colorScale = d3.scaleLinear()
+                .domain([0, 0.5, 1])
+                .range(['#F44336', '#FFD700', '#4CAF50']);
+            
+            // 创建大小比例尺
+            const sizeScale = d3.scaleLinear()
+                .domain([0, d3.max(data, d => d.totalValue)])
+                .range([10, 50]);
+            
+            // 添加热点图矩形
+            svg.selectAll()
+                .data(data)
+                .enter()
+                .append('rect')
+                .attr('x', d => x(d.symbol))
+                .attr('y', d => y('多空比例'))
+                .attr('width', x.bandwidth())
+                .attr('height', y.bandwidth())
+                .style('fill', d => colorScale(d.ratio))
+                .style('stroke', '#333')
+                .style('stroke-width', 1)
+                .append('title')
+                .text(d => `${d.symbol}\n多单: ${d.longCount}\n空单: ${d.shortCount}\n总价值: ${d.totalValue.toFixed(2)} USD\n振幅: ${d.amplitude.toFixed(2)}%`);
+        }
+        
+        // 更新强平订单列表
+        function updateLiquidationList() {
+            const list = document.getElementById('liquidationList');
+            list.innerHTML = '';
+            
+            liquidationData.slice(0, 10).forEach(item => {
+                const li = document.createElement('li');
+                li.className = item.side === 'BUY' ? 'short' : 'long';
+                li.textContent = `${new Date(item.time).toLocaleTimeString()} | ${item.symbol} | ${item.side === 'BUY' ? '做空' : '做多'} | ${item.price.toFixed(4)} | ${item.value.toFixed(2)} USD`;
+                list.appendChild(li);
+            });
+        }
+        
+        // 更新统计数据列表
+        function updateStatsList() {
+            const list = document.getElementById('statsList');
+            list.innerHTML = '';
+            
+            Object.keys(statsData).sort((a, b) => statsData[b].totalValue - statsData[a].totalValue).slice(0, 10).forEach(symbol => {
+                const stats = statsData[symbol];
+                const li = document.createElement('li');
+                
+                if (stats.longCount > stats.shortCount) {
+                    li.className = 'long';
+                } else if (stats.shortCount > stats.longCount) {
+                    li.className = 'short';
+                } else {
+                    li.className = 'neutral';
+                }
+                
+                li.textContent = `${symbol} | 多: ${stats.longCount} | 空: ${stats.shortCount} | 总值: ${stats.totalValue.toFixed(2)} USD | 振幅: ${stats.amplitude.toFixed(2)}%`;
+                list.appendChild(li);
+            });
+        }
+        
+        // 监听来自父窗口的消息
+        window.addEventListener('message', function(event) {
+            if (event.data.type === 'liquidation') {
+                // 添加到数据数组的开头
+                liquidationData.unshift(event.data.data);
+                // 限制数组大小
+                if (liquidationData.length > 100) {
+                    liquidationData.pop();
+                }
+                updateLiquidationList();
+            } else if (event.data.type === 'statsData') {
+                statsData = event.data.data;
+                updateStatsList();
+                updateHeatmap();
+            }
+        });
+        
+        // 初始化页面
+        document.addEventListener('DOMContentLoaded', function() {
+            initHeatmap();
+        });
+        
+        // 通知opener窗口已关闭
+        window.addEventListener('beforeunload', function() {
+            if (window.opener) {
+                try {
+                    window.opener.postMessage({type: 'marketWindowClosed'}, '*');
+                } catch (error) {
+                    console.error('通知opener窗口关闭时出错:', error);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
